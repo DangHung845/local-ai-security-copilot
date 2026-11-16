@@ -8,8 +8,8 @@
 | --- | --- |
 | Type | Undergraduate graduation project ("TT tốt nghiệp"), team of 2 students |
 | Duration | 6 months |
-| Student 1 | `Đặng Quang Hưng` — Student ID: `23127196` |
-| Student 2 | `Trần Trọng Hưng` — Student ID: `23127374` |
+| Student 1 |Đặng Quang Hưng — Student ID: 23127196 |
+| Student 2 | Trần Trọng Hưng — Student ID: 23127374 |
 | Supervisor | Senior Lecturer Đỗ Hoàng Cường, M.Sc. |
 | Institution | Faculty of Information Technology, University of Science, VNU-HCM |
 
