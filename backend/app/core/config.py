@@ -4,9 +4,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    ollama_base_url: str = "http://172.23.128.1:11434"
+    # Mặc định localhost; nếu Ollama chạy ở Windows host (WSL), đặt OLLAMA_BASE_URL trong .env
+    ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b"
     ollama_timeout: float = 120.0
+    audit_log_path: str = "logs/audit.jsonl"
 
     model_config = SettingsConfigDict(
         env_file=".env",
