@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Local databases and vector stores
+*.db
+chroma_db/
+vector_store/
+
+# Datasets and model files
+datasets/*
+!datasets/.gitkeep
+*.gguf
+*.safetensors
+*.pt
+*.pth
+
+# OS
+.DS_Store
+Thumbs.db
