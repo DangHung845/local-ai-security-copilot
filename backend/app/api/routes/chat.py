@@ -1,13 +1,23 @@
+import asyncio
 import time
+from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException
 
 from app.core.audit import AuditLogger
 from app.core.config import get_settings
-from app.core.prompts import BASE_SYSTEM_PROMPT, DENY_MESSAGES, REDIRECT_ADDENDUM
-from app.models.chat import ChatRequest, ChatResponse
+from app.core.prompts import (
+    BASE_SYSTEM_PROMPT,
+    DENY_MESSAGES,
+    RAG_ADDENDUM,
+    REDIRECT_ADDENDUM,
+    build_rag_prompt,
+)
+from app.models.chat import ChatRequest, ChatResponse, Source
 from app.policy import Decision, PolicyEngine
 from app.policy.engine import is_vietnamese
+from app.rag import HybridRetriever, IndexStore
+from app.rag.embedder import OllamaEmbedder
 from app.services.ollama_service import (
     OllamaConnectionError,
     OllamaResponseError,
@@ -18,6 +28,21 @@ from app.services.ollama_service import (
 router = APIRouter()
 ollama_service = OllamaService()
 policy_engine = PolicyEngine()
+
+
+@lru_cache
+def get_retriever() -> HybridRetriever | None:
+    cfg = get_settings()
+    if not cfg.rag_enabled:
+        return None
+    try:
+        store = IndexStore.load(cfg.rag_index_path)
+    except (OSError, ValueError):
+        return None  # chưa chạy scripts/ingest.py -> chat không RAG
+    embedder = None
+    if cfg.rag_use_embeddings and store.embeddings:
+        embedder = OllamaEmbedder(cfg.ollama_base_url, store.embed_model or cfg.rag_embed_model, cfg.ollama_timeout)
+    return HybridRetriever(store, embedder, cfg.rag_top_k, min_semantic=cfg.rag_min_semantic)
 
 
 def _audit() -> AuditLogger:
@@ -47,9 +72,23 @@ async def chat(request: ChatRequest):
     if policy.decision is Decision.REDIRECT:
         system_prompt += REDIRECT_ADDENDUM
 
+    prompt, hits = request.prompt, []
+    retriever = get_retriever()
+    if retriever:
+        # search có thể gọi HTTP (embedding) nên chạy ở thread riêng để không chặn event loop
+        hits = await asyncio.to_thread(retriever.search, request.prompt)
+        if hits:
+            prompt = build_rag_prompt(request.prompt, hits)
+            system_prompt += RAG_ADDENDUM
+        audit.log("retrieval", request.prompt, chunk_ids=[h.chunk.id for h in hits])
+    sources = [
+        Source(n=i, source=h.chunk.source, heading=h.chunk.heading, chunk_id=h.chunk.id)
+        for i, h in enumerate(hits, 1)
+    ]
+
     start = time.perf_counter()
     try:
-        answer = await ollama_service.generate(prompt=request.prompt, system_prompt=system_prompt)
+        answer = await ollama_service.generate(prompt=prompt, system_prompt=system_prompt)
     except OllamaTimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except OllamaConnectionError as exc:
@@ -70,4 +109,5 @@ async def chat(request: ChatRequest):
         policy_category=policy.category,
         policy_reason=policy.reason,
         hitl_required=policy.hitl_required,
+        sources=sources,
     )
