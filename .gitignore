@@ -22,6 +22,8 @@ logs/
 *.db
 chroma_db/
 vector_store/
+backend/data/rag_index.json
+backend/data/chroma/
 
 # Datasets and model files
 datasets/*
