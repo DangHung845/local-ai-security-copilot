@@ -11,6 +11,15 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 8192
     audit_log_path: str = "logs/audit.jsonl"
 
+    rag_enabled: bool = True
+    rag_index_path: str = "data/rag_index.json"
+    rag_embed_model: str = "bge-m3"
+    rag_use_embeddings: bool = True
+    rag_top_k: int = 4
+    rag_min_semantic: float = 0.5
+    rag_chroma_dir: str = "data/chroma"
+    rag_chroma_collection: str = "security_knowledge"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
