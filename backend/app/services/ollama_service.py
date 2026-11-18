@@ -34,6 +34,7 @@ class OllamaService:
             "model": self.settings.ollama_model,
             "prompt": prompt,
             "stream": False,
+            "options": {"num_ctx": self.settings.ollama_num_ctx}    
         }
 
         if system_prompt:

@@ -1,5 +1,5 @@
 from app.rag.chunker import Chunk, chunk_markdown
 from app.rag.retriever import Hit, HybridRetriever
-from app.rag.store import IndexStore
+from app.rag.store import ChromaStore, IndexStore
 
-__all__ = ["Chunk", "chunk_markdown", "Hit", "HybridRetriever", "IndexStore"]
+__all__ = ["Chunk", "chunk_markdown", "Hit", "HybridRetriever", "IndexStore", "ChromaStore"]
