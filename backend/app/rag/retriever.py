@@ -20,12 +20,16 @@ def _ranks(scores: list[float]) -> dict[int, int]:
 
 class HybridRetriever:
     def __init__(self, store: IndexStore, embedder=None, top_k: int = 4,
-                 rrf_k: int = 60, min_semantic: float = 0.5, min_coverage: float = 0.3,
-                 chroma: ChromaStore | None = None):
+                 rrf_k: int = 60, min_coverage: float = 0.3,
+                 chroma: ChromaStore | None = None, bm25_candidates: int = 50,
+                 chroma_candidates: int = 50, reranker=None):
         self.store, self.embedder = store, embedder
         self.chroma = chroma
-        self.top_k, self.rrf_k, self.min_semantic = top_k, rrf_k, min_semantic
+        self.top_k, self.rrf_k = top_k, rrf_k
         self.min_coverage = min_coverage
+        self.bm25_candidates = bm25_candidates
+        self.chroma_candidates = chroma_candidates
+        self.reranker = reranker
 
     def search(self, query: str, top_k: int | None = None) -> list[Hit]:
         k = top_k or self.top_k
@@ -36,35 +40,59 @@ class HybridRetriever:
         lex = bm25.scores(query)
         cov = bm25.coverage(query)
         lex = [x if c >= self.min_coverage else 0.0 for x, c in zip(lex, cov)]
-        sem = self._dense_chroma(query, k)
+        sem_candidates = self._dense_chroma(query)
+        sem_scores = [0.0] * n
+        sem_candidate_indices = set()
+        for i, similarity in sem_candidates:
+            sem_scores[i] = similarity
+            sem_candidate_indices.add(i)
+
         fused = [0.0] * n
-        for i, r in _ranks(lex).items():
-            if lex[i] > 0:
-                fused[i] += 1 / (self.rrf_k + r)
-        if sem is not None:
-            for i, r in _ranks(sem).items():
-                fused[i] += 1 / (self.rrf_k + r)
+
+        bm25_candidate_indices = sorted(
+            (i for i, score in enumerate(lex) if score > 0),
+            key=lambda i: lex[i],
+            reverse=True,
+        )[:self.bm25_candidates]
+        for rank, i in enumerate(bm25_candidate_indices, 1):
+            fused[i] += 1 / (self.rrf_k + rank)
+
+        for rank, (i, _similarity) in enumerate(sem_candidates, 1):
+            if rank <= self.chroma_candidates:
+                fused[i] += 1 / (self.rrf_k + rank)
+
+        candidate_indices = {
+            i for i, score in enumerate(fused) if score > 0
+        }
+        candidates = [
+            (i, self.store.chunks[i], fused[i])
+            for i in sorted(candidate_indices, key=lambda i: fused[i], reverse=True)
+        ]
+
+        if self.reranker:
+            reranked = self.reranker.rerank(query, candidates, k)
+        else:
+            reranked = candidates[:k]
+
         hits = []
-        for i in sorted(range(n), key=lambda i: fused[i], reverse=True):
-            relevant = lex[i] > 0 or (sem is not None and sem[i] >= self.min_semantic)
-            if relevant and fused[i] > 0:
-                hits.append(Hit(self.store.chunks[i], fused[i], lex[i], sem[i] if sem else None))
-            if len(hits) == k:
-                break
+        for i, chunk, rrf_score in reranked:
+            semantic = sem_scores[i] if i in sem_candidate_indices else None
+            hits.append(Hit(chunk, rrf_score, lex[i], semantic))
         return hits
 
-    def _dense_chroma(self, query: str, top_k: int) -> list[float] | None:
+    def _dense_chroma(self, query: str) -> list[tuple[int, float]]:
         if not (self.embedder and self.chroma):
-            return None
+            return []
         try:
             q = self.embedder.embed([query])[0]
-            chroma_hits = self.chroma.search(q, max(top_k * 3, top_k))
+            chroma_hits = self.chroma.search(q, self.chroma_candidates)
         except Exception:
-            return None
-        scores = [0.0] * len(self.store.chunks)
+            return []
+
         by_id = {chunk.id: i for i, chunk in enumerate(self.store.chunks)}
+        candidates = []
         for chunk, similarity in chroma_hits:
             i = by_id.get(chunk.id)
             if i is not None:
-                scores[i] = similarity
-        return scores
+                candidates.append((i, similarity))
+        return candidates

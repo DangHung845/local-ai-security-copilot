@@ -16,11 +16,24 @@ STOP_FOLD = {normalize(w) for w in STOP}
 
 
 def tokenize(text: str, fold: bool = False) -> list[str]:
-    """fold=False giữ dấu (chính xác hơn: "bò" khác "bỏ"); fold=True bỏ dấu để khớp câu hỏi gõ không dấu."""
+    """Giữ identifier nguyên vẹn (vd: V2.2.1, CVE-2024-1234, T1110) thay vì tách dấu."""
+    token_pattern = r"(?:[^\W_]+(?:[._-][^\W_]+)+|[^\W_]*\d+[^\W_]*|[^\W_]+)"
+
     if fold:
-        words = [w for w in re.findall(r"[a-z0-9]+", normalize(text)) if w not in STOP_FOLD]
+        normalized = normalize(text)
+        words = [
+            w.lower()
+            for w in re.findall(token_pattern, normalized, flags=re.UNICODE)
+            if w.lower() not in STOP_FOLD
+        ]
     else:
-        words = [w for w in re.findall(r"\w+", unicodedata.normalize("NFC", text).lower()) if w not in STOP]
+        normalized = unicodedata.normalize("NFC", text).lower()
+        words = [
+            w
+            for w in re.findall(token_pattern, normalized, flags=re.UNICODE)
+            if w not in STOP
+        ]
+
     return words + [f"{a}_{b}" for a, b in zip(words, words[1:])]  # unigram + bigram
 
 

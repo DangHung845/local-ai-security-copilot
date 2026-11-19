@@ -18,6 +18,7 @@ from app.policy import Decision, PolicyEngine
 from app.policy.engine import is_vietnamese
 from app.rag import HybridRetriever, IndexStore
 from app.rag.embedder import OllamaEmbedder
+from app.rag.reranker import OllamaReranker
 from app.rag.store import ChromaStore
 from app.services.ollama_service import (
     OllamaConnectionError,
@@ -51,7 +52,23 @@ def get_retriever() -> HybridRetriever | None:
                 chroma = None
         except Exception:
             chroma = None
-    return HybridRetriever(store, embedder, cfg.rag_top_k, min_semantic=cfg.rag_min_semantic, chroma=chroma)
+    reranker = None
+    if cfg.rag_reranker_enabled:
+        reranker = OllamaReranker(
+            cfg.ollama_base_url,
+            cfg.rag_reranker_model,
+            cfg.ollama_timeout,
+        )
+
+    return HybridRetriever(
+        store,
+        embedder,
+        cfg.rag_top_k,
+        chroma=chroma,
+        bm25_candidates=cfg.rag_bm25_candidates,
+        chroma_candidates=cfg.rag_chroma_candidates,
+        reranker=reranker,
+    )
 
 
 def _audit() -> AuditLogger:

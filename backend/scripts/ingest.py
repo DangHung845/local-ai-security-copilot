@@ -10,6 +10,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.core.config import get_settings
 from app.rag.chunker import Chunk, chunk_markdown
 from app.rag.embedder import OllamaEmbedder
 from app.rag.store import ChromaStore, IndexStore
@@ -29,9 +30,13 @@ def main() -> None:
     parser.add_argument("--index", default=str(BACKEND_DIR / "data" / "rag_index.json"))
     parser.add_argument("--chroma-dir", default=str(BACKEND_DIR / "data" / "chroma"))
     parser.add_argument("--collection", default="security_knowledge")
-    parser.add_argument("--ollama-url", default="http://localhost:11434")
-    parser.add_argument("--embed-model", default="bge-m3")
+    parser.add_argument("--ollama-url", default=None)
+    parser.add_argument("--embed-model", default=None)
     args = parser.parse_args()
+
+    cfg = get_settings()
+    ollama_url = args.ollama_url or cfg.ollama_base_url
+    embed_model = args.embed_model or cfg.rag_embed_model
 
     knowledge_dir = Path(args.knowledge_dir)
     if not knowledge_dir.exists():
@@ -41,7 +46,7 @@ def main() -> None:
     for source, text in read_markdown_files(knowledge_dir):
         chunks.extend(chunk_markdown(text, source))
 
-    embedder = OllamaEmbedder(args.ollama_url, args.embed_model)
+    embedder = OllamaEmbedder(ollama_url, embed_model, cfg.ollama_timeout)
     embeddings: list[list[float]] = []
     batch_size = 32
     for start in range(0, len(chunks), batch_size):
@@ -49,7 +54,7 @@ def main() -> None:
         documents = [f"{chunk.heading}\n{chunk.text}" for chunk in batch]
         embeddings.extend(embedder.embed(documents))
 
-    index = IndexStore(chunks, embed_model=args.embed_model)
+    index = IndexStore(chunks, embed_model=embed_model)
     index.save(args.index)
 
     chroma = ChromaStore(args.chroma_dir, args.collection)

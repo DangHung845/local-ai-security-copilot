@@ -13,6 +13,8 @@ class Chunk:
 
 def _split_sections(text: str):
     path, buf, sections = [], [], []
+    fence_char = None
+    fence_length = 0
 
     def flush():
         body = "\n".join(buf).strip()
@@ -21,6 +23,24 @@ def _split_sections(text: str):
         buf.clear()
 
     for line in text.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence:
+            marker = fence.group(1)
+            char = marker[0]
+            length = len(marker)
+            if fence_char is None:
+                fence_char = char
+                fence_length = length
+            elif char == fence_char and length >= fence_length:
+                fence_char = None
+                fence_length = 0
+            buf.append(line)
+            continue
+
+        if fence_char is not None:
+            buf.append(line)
+            continue
+
         m = re.match(r"^(#{1,6})\s+(.*\S)\s*$", line)
         if m:
             flush()

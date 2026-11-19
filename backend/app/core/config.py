@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     rag_embed_model: str = "bge-m3"
     rag_use_embeddings: bool = True
     rag_top_k: int = 4
-    rag_min_semantic: float = 0.5
+    rag_bm25_candidates: int = 50
+    rag_chroma_candidates: int = 50
+    rag_reranker_enabled: bool = True
+    rag_reranker_model: str = "qwen2.5:7b"
     rag_chroma_dir: str = "data/chroma"
     rag_chroma_collection: str = "security_knowledge"
 
