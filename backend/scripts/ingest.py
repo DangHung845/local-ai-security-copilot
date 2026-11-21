@@ -1,65 +1,70 @@
-"""Ingest Markdown knowledge files into BM25/JSON and ChromaDB."""
+"""Nạp knowledge_base/**/*.md vào index JSON (BM25) và ChromaDB (dense).
 
-from __future__ import annotations
-
+    python scripts/ingest.py             # tăng dần: chỉ embed phần mới/đổi
+    python scripts/ingest.py --rebuild   # xóa sạch và embed lại (bắt buộc khi đổi model embedding)
+    python scripts/ingest.py --no-dense  # chỉ BM25 (không cần Ollama)
+Mặc định lấy cấu hình từ .env giống server nên ingest và server luôn trỏ cùng một index.
+"""
 import argparse
 import sys
+import time
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR))
 
-from app.rag.chunker import Chunk, chunk_markdown
-from app.rag.embedder import OllamaEmbedder
-from app.rag.store import ChromaStore, IndexStore
-
-
-def read_markdown_files(directory: Path) -> list[tuple[str, str]]:
-    return [
-        (str(path.relative_to(directory)), path.read_text(encoding="utf-8", errors="replace"))
-        for path in sorted(directory.rglob("*.md"))
-        if path.is_file()
-    ]
+from app.core.config import get_settings  # noqa: E402
+from app.rag.embedder import OllamaEmbedder  # noqa: E402
+from app.rag.ingest import load_kb, plan  # noqa: E402
+from app.rag.store import ChromaStore, IndexStore  # noqa: E402
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ingest knowledge base into RAG stores")
-    parser.add_argument("--knowledge-dir", default=str(BACKEND_DIR.parent / "knowledge_base"))
-    parser.add_argument("--index", default=str(BACKEND_DIR / "data" / "rag_index.json"))
-    parser.add_argument("--chroma-dir", default=str(BACKEND_DIR / "data" / "chroma"))
-    parser.add_argument("--collection", default="security_knowledge")
-    parser.add_argument("--ollama-url", default="http://localhost:11434")
-    parser.add_argument("--embed-model", default="bge-m3")
-    args = parser.parse_args()
+    cfg = get_settings()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--knowledge-dir", default=str(BACKEND_DIR.parent / "knowledge_base"))
+    ap.add_argument("--rebuild", action="store_true")
+    ap.add_argument("--no-dense", action="store_true")
+    ap.add_argument("--batch", type=int, default=16)
+    args = ap.parse_args()
 
-    knowledge_dir = Path(args.knowledge_dir)
-    if not knowledge_dir.exists():
-        raise SystemExit(f"Knowledge base directory not found: {knowledge_dir}")
+    kb = Path(args.knowledge_dir)
+    if not kb.exists():
+        raise SystemExit(f"Không thấy thư mục tri thức: {kb}")
+    chunks = load_kb(kb)
+    print(f"{len(chunks)} chunk từ {kb}")
 
-    chunks: list[Chunk] = []
-    for source, text in read_markdown_files(knowledge_dir):
-        chunks.extend(chunk_markdown(text, source))
+    old_model = None
+    try:
+        old_model = IndexStore.load(cfg.rag_index_path).embed_model
+    except (OSError, ValueError):
+        pass
+    model = None if args.no_dense else cfg.rag_embed_model
+    IndexStore(chunks, embed_model=model).save(cfg.rag_index_path)
+    print(f"JSON index: {cfg.rag_index_path}")
+    if args.no_dense:
+        return
 
-    embedder = OllamaEmbedder(args.ollama_url, args.embed_model)
-    embeddings: list[list[float]] = []
-    batch_size = 32
-    for start in range(0, len(chunks), batch_size):
-        batch = chunks[start:start + batch_size]
-        documents = [f"{chunk.heading}\n{chunk.text}" for chunk in batch]
-        embeddings.extend(embedder.embed(documents))
+    store = ChromaStore(cfg.rag_chroma_dir, cfg.rag_chroma_collection)
+    if args.rebuild or (old_model and old_model != model):
+        why = "--rebuild" if args.rebuild else f"đổi model {old_model} -> {model}"
+        print(f"Xóa sạch ChromaDB ({why})")
+        store.reset()
+    todo, hashes, stale = plan(chunks, store.existing_hashes(), model, cfg.rag_embed_doc_prefix)
+    print(f"Cần embed {len(todo)}, giữ nguyên {len(chunks) - len(todo)}, xóa {len(stale)} vector cũ")
+    if stale:
+        store.delete(stale)
 
-    index = IndexStore(chunks, embed_model=args.embed_model)
-    index.save(args.index)
-
-    chroma = ChromaStore(args.chroma_dir, args.collection)
-    chroma.reset()
-    if chunks:
-        chroma.upsert(chunks, embeddings)
-
-    print(f"Ingested {len(chunks)} chunks from {knowledge_dir}")
-    print(f"JSON index: {args.index}")
-    print(f"ChromaDB: {args.chroma_dir} ({chroma.count()} vectors)")
+    emb = OllamaEmbedder(cfg.ollama_base_url, model, cfg.ollama_timeout, cfg.rag_embed_query_prefix,
+                         cfg.rag_embed_doc_prefix, cfg.rag_embed_keep_alive, cfg.rag_embed_num_gpu)
+    t0 = time.time()
+    for s in range(0, len(todo), args.batch):
+        batch = todo[s:s + args.batch]
+        vecs = emb.embed_documents([f"{c.heading}\n{c.text}" for c in batch])
+        store.upsert(batch, vecs, hashes[s:s + args.batch])   # ghi từng batch: ngắt giữa chừng vẫn chạy tiếp được
+        done = s + len(batch)
+        print(f"  {done}/{len(todo)}  ({done / max(time.time() - t0, 1e-6):.1f} chunk/s)", end="\r")
+    print(f"\nChromaDB: {cfg.rag_chroma_dir} ({store.count()} vector, model {model})")
 
 
 if __name__ == "__main__":
