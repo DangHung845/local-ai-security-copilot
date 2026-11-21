@@ -16,9 +16,7 @@ from app.core.prompts import (
 from app.models.chat import ChatRequest, ChatResponse, Source
 from app.policy import Decision, PolicyEngine
 from app.policy.engine import is_vietnamese
-from app.rag import HybridRetriever, IndexStore
-from app.rag.embedder import OllamaEmbedder
-from app.rag.store import ChromaStore
+from app.rag.factory import build_retriever
 from app.services.ollama_service import (
     OllamaConnectionError,
     OllamaResponseError,
@@ -32,26 +30,17 @@ policy_engine = PolicyEngine()
 
 
 @lru_cache
-def get_retriever() -> HybridRetriever | None:
-    cfg = get_settings()
-    if not cfg.rag_enabled:
-        return None
-    try:
-        store = IndexStore.load(cfg.rag_index_path)
-    except (OSError, ValueError):
-        return None  # chưa chạy scripts/ingest.py -> chat không RAG
-    embedder = None
-    if cfg.rag_use_embeddings:
-        embedder = OllamaEmbedder(cfg.ollama_base_url, store.embed_model or cfg.rag_embed_model, cfg.ollama_timeout)
-    chroma = None
-    if cfg.rag_use_embeddings:
-        try:
-            chroma = ChromaStore(cfg.rag_chroma_dir, cfg.rag_chroma_collection)
-            if chroma.count() == 0:
-                chroma = None
-        except Exception:
-            chroma = None
-    return HybridRetriever(store, embedder, cfg.rag_top_k, min_semantic=cfg.rag_min_semantic, chroma=chroma)
+def get_status_and_retriever():
+    return build_retriever(get_settings())
+
+
+def get_retriever():
+    return get_status_and_retriever()[0]
+
+
+def reload_retriever() -> None:
+    """Xóa cache sau khi chạy lại ingest, không cần khởi động lại server."""
+    get_status_and_retriever.cache_clear()
 
 
 def _audit() -> AuditLogger:
@@ -85,11 +74,16 @@ async def chat(request: ChatRequest):
     retriever = get_retriever()
     if retriever:
         # search có thể gọi HTTP (embedding) nên chạy ở thread riêng để không chặn event loop
-        hits = await asyncio.to_thread(retriever.search, request.prompt)
+        result = await asyncio.to_thread(retriever.search_detailed, request.prompt)
+        hits = result.hits
         if hits:
             prompt = build_rag_prompt(request.prompt, hits)
             system_prompt += RAG_ADDENDUM
-        audit.log("retrieval", request.prompt, chunk_ids=[h.chunk.id for h in hits])
+        audit.log(
+            "retrieval", request.prompt, chunk_ids=[h.chunk.id for h in hits],
+            dense_used=result.dense_used, dense_error=result.dense_error,
+            top_semantic=result.top_semantic,
+        )
     sources = [
         Source(n=i, source=h.chunk.source, heading=h.chunk.heading, chunk_id=h.chunk.id)
         for i, h in enumerate(hits, 1)
