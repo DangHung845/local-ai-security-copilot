@@ -17,3 +17,33 @@ DENY_MESSAGES = {
     "en": "I can't help with this request: {reason} I can help from the defensive side instead, e.g. detection, "
           "mitigation, or writing alert rules (Sigma/YARA/Suricata) for the same technique.",
 }
+
+RAG_ADDENDUM = (
+    " Chỉ sử dụng các tài liệu được cung cấp trong phần ngữ cảnh để trả lời. "
+    "Trích dẫn nguồn bằng chunk_id khi thông tin đến trực tiếp từ tài liệu; "
+    "nếu tài liệu không chứa câu trả lời, hãy nói rõ thay vì bịa."
+)
+
+
+def build_rag_prompt(question: str, hits) -> str:
+    """Ghép câu hỏi với các chunk RAG và giữ metadata nguồn cho mô hình."""
+    context = []
+    for i, hit in enumerate(hits, 1):
+        chunk = hit.chunk
+        heading = chunk.heading or "Không có tiêu đề"
+        context.append(
+            f"[Tài liệu {i}]\n"
+            f"Nguồn: {chunk.source}\n"
+            f"Tiêu đề: {heading}\n"
+            f"Chunk ID: {chunk.id}\n"
+            f"Nội dung:\n{chunk.text}"
+        )
+
+    return (
+        "Hãy trả lời câu hỏi dựa trên ngữ cảnh bên dưới. "
+        "Không suy đoán thông tin không có trong ngữ cảnh.\n\n"
+        "<context>\n"
+        + "\n\n".join(context)
+        + "\n</context>\n\n"
+        + f"Câu hỏi: {question}"
+    )

@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from app.rag.chunker import Chunk
-from app.rag.store import IndexStore
+from app.rag.store import ChromaStore, IndexStore
 
 
 @dataclass
@@ -20,8 +20,10 @@ def _ranks(scores: list[float]) -> dict[int, int]:
 
 class HybridRetriever:
     def __init__(self, store: IndexStore, embedder=None, top_k: int = 4,
-                 rrf_k: int = 60, min_semantic: float = 0.5, min_coverage: float = 0.3):
+                 rrf_k: int = 60, min_semantic: float = 0.5, min_coverage: float = 0.3,
+                 chroma: ChromaStore | None = None):
         self.store, self.embedder = store, embedder
+        self.chroma = chroma
         self.top_k, self.rrf_k, self.min_semantic = top_k, rrf_k, min_semantic
         self.min_coverage = min_coverage
 
@@ -34,7 +36,7 @@ class HybridRetriever:
         lex = bm25.scores(query)
         cov = bm25.coverage(query)
         lex = [x if c >= self.min_coverage else 0.0 for x, c in zip(lex, cov)]
-        sem = self._dense(query)
+        sem = self._dense_chroma(query, k)
         fused = [0.0] * n
         for i, r in _ranks(lex).items():
             if lex[i] > 0:
@@ -51,11 +53,18 @@ class HybridRetriever:
                 break
         return hits
 
-    def _dense(self, query: str) -> list[float] | None:
-        if not (self.embedder and self.store.embeddings):
+    def _dense_chroma(self, query: str, top_k: int) -> list[float] | None:
+        if not (self.embedder and self.chroma):
             return None
         try:
             q = self.embedder.embed([query])[0]
-        except Exception:  # Ollama/mạng lỗi (httpx.HTTPError, KeyError...) -> rơi về BM25
+            chroma_hits = self.chroma.search(q, max(top_k * 3, top_k))
+        except Exception:
             return None
-        return [sum(a * b for a, b in zip(q, d)) for d in self.store.embeddings]
+        scores = [0.0] * len(self.store.chunks)
+        by_id = {chunk.id: i for i, chunk in enumerate(self.store.chunks)}
+        for chunk, similarity in chroma_hits:
+            i = by_id.get(chunk.id)
+            if i is not None:
+                scores[i] = similarity
+        return scores
