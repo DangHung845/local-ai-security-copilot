@@ -15,12 +15,32 @@ STOP = set(_STOP_VI) | set(_STOP_EN)
 STOP_FOLD = {normalize(w) for w in STOP}
 
 
+_SUFFIXES = ("ations", "ation", "ities", "ity", "ings", "ing", "ions", "ion", "ies", "ed", "es", "ly", "s")
+
+
+def stem(w: str) -> str:
+    """Bộ rút gọn hậu tố tiếng Anh rất nhẹ (prevention/prevent, stored/store, passwords/password).
+    Chỉ áp cho từ ASCII dài; không đụng tiếng Việt."""
+    if len(w) < 5 or not (w.isascii() and w.isalpha()):
+        return w
+    if w.endswith("ies"):
+        return w[:-3] + "y"
+    for suf in _SUFFIXES:
+        if suf == "s" and w.endswith(("ss", "us", "is")):  # cross, access, status, analysis
+            continue
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            w = w[: -len(suf)]
+            break
+    return w[:-1] if w.endswith("e") and len(w) > 4 else w
+
+
 def tokenize(text: str, fold: bool = False) -> list[str]:
     """fold=False giữ dấu (chính xác hơn: "bò" khác "bỏ"); fold=True bỏ dấu để khớp câu hỏi gõ không dấu."""
     if fold:
         words = [w for w in re.findall(r"[a-z0-9]+", normalize(text)) if w not in STOP_FOLD]
     else:
         words = [w for w in re.findall(r"\w+", unicodedata.normalize("NFC", text).lower()) if w not in STOP]
+    words = [stem(w) for w in words]
     return words + [f"{a}_{b}" for a, b in zip(words, words[1:])]  # unigram + bigram
 
 
